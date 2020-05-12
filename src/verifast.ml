@@ -2702,7 +2702,7 @@ module VerifyProgram(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
   let rec verify_meths (pn,ilist) cfin cabstract boxes lems meths ctparams=
     match meths with
       [] -> ()
-    | ((g,sign), MethodInfo (l,gh, rt, ps,pre,pre_tenv,post,epost,pre_dyn,post_dyn,epost_dyn,terminates,sts,fb,v, _,abstract))::meths ->
+    | ((g,sign), MethodInfo (l,gh, rt, ps,pre,pre_tenv,post,epost,pre_dyn,post_dyn,epost_dyn,terminates,sts,fb,v, _,abstract, mtparams))::meths ->
       if abstract && not cabstract then static_error l "Abstract method can only appear in abstract class." None;
       match sts with
         None -> let ((p,_,_),(_,_,_))= root_caller_token l in 

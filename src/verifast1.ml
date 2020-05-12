@@ -499,7 +499,7 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       let meths' = meths |> List.filter begin
         fun x ->
           match x with
-            | Meth(lm, gh, t, n, ps, co, ss,fb,v,abstract) ->
+            | Meth(lm, gh, t, n, ps, co, ss,fb,v,abstract, mtparams) ->
               match ss with
                 | None -> true
                 | Some _ -> false
@@ -649,6 +649,7 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       * visibility
       * bool (* is override *)
       * bool (* is abstract *)
+      * string list (* type parameters *)
     type interface_method_info =
       ItfMethodInfo of
         loc
@@ -662,6 +663,7 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       * bool (* terminates *)
       * visibility
       * bool (* is abstract *)
+      * string list (* type parameters *)
     type field_info = {
         fl: loc;
         fgh: ghostness;
@@ -1267,7 +1269,7 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
   let rec replace_type loc targenv t = match t with
       RealTypeParam t -> 
         begin try List.assoc t targenv with 
-        | Not_found -> static_error loc (Printf.sprintf "Type argument for type param %s not provided." t) None end
+        | Not_found -> failwith (Printf.sprintf "Type argument for type param %s not provided." t) end
     | ArrayType t -> ArrayType (replace_type loc targenv t)
     | ObjType (n,ts) -> ObjType (n, List.map (replace_type loc targenv) ts)
     | t -> t
@@ -1430,7 +1432,7 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
         Some (n, l) ->
         AbstractType n
       | None ->
-      static_error l ("No such type parameter, inductive datatype, class, interface, or function type: " ^pn^" "^id) None
+      failwith ("No such type parameter, inductive datatype, class, interface, or function type: " ^pn^" "^id)
       end
     | IdentTypeExpr (l, Some(pac), id) ->
       let full_name = pac ^ "." ^ id in
@@ -2811,8 +2813,8 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
         in
         let declared_methods =
           flatmap
-            begin fun ((mn', sign), MethodInfo (lm, gh, rt, xmap, pre, pre_tenv, post, epost, pre_dyn, post_dyn, epost_dyn, terminates, ss, fb, v, is_override, abstract)) ->
-              if mn' = mn then [(sign, (tn, lm, gh, rt, xmap, pre_dyn, post_dyn, epost_dyn, terminates, fb, v, abstract))] else []
+            begin fun ((mn', sign), MethodInfo (lm, gh, rt, xmap, pre, pre_tenv, post, epost, pre_dyn, post_dyn, epost_dyn, terminates, ss, fb, v, is_override, abstract, mtparams)) ->
+              if mn' = mn then [(sign, (tn, lm, gh, rt, xmap, pre_dyn, post_dyn, epost_dyn, terminates, fb, v, abstract, mtparams))] else []
             end
             cmeths
         in
@@ -2820,8 +2822,8 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
       | None ->
       let InterfaceInfo (_, fields, meths, _, interfs, _) = List.assoc tn interfmap in
       let declared_methods = flatmap
-        begin fun ((mn', sign), ItfMethodInfo (lm, gh, rt, xmap, pre, pre_tenv, post, epost, terminates, v, abstract)) ->
-          if mn' = mn then [(sign, (tn, lm, gh, rt, xmap, pre, post, epost, terminates, Instance, v, abstract))] else []
+        begin fun ((mn', sign), ItfMethodInfo (lm, gh, rt, xmap, pre, pre_tenv, post, epost, terminates, v, abstract, mtparams)) ->
+          if mn' = mn then [(sign, (tn, lm, gh, rt, xmap, pre, post, epost, terminates, Instance, v, abstract, mtparams))] else []
         end
         meths
       in
@@ -3269,8 +3271,12 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
         if ms = [] then on_fail () else
         let argtps = List.map (fun e -> let (_, tp, _) = (check e) in tp) args in
         (* Select the real methods with the correct number of type parameters *)
-        let ms = List.map (fun (sign, (tn', lm, gh, rt, xmap, pre, post, epost, terminates, fb', v, abstract)) ->
-          let targenv = if inAnnotation <> Some(true) then List.map2 (fun a b -> (a, b)) class_tparams class_targs else []
+        let ms = List.map (fun (sign, (tn', lm, gh, rt, xmap, pre, post, epost, terminates, fb', v, abstract, mtparams)) ->
+          let targenv = if inAnnotation <> Some(true) then 
+            let targs = List.map (check_pure_type (pn,ilist) mtparams Real) targes in
+            let classTargEnv = match zip class_tparams class_targs with Some(tenv) -> tenv | None -> static_error l "The amount of type arguments for the class and the expected number of type parameters does not match." None in
+            let methodTargEnv = match zip mtparams targs with Some(tenv) -> tenv | None -> static_error l "Type arguments not correctly specified" None in
+            classTargEnv@methodTargEnv else []
           in
           (* Replace the type parameters with their concrete type*)
           let sign' = 
@@ -3446,7 +3452,7 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
           begin try
             let m =
               List.find
-                begin fun ((mn', sign), MethodInfo (lm, gh, rt, xmap, pre, pre_tenv, post, epost, pre_dyn, post_dyn, epost_dyn, terminates, ss, fb, v, is_override, abstract)) ->
+                begin fun ((mn', sign), MethodInfo (lm, gh, rt, xmap, pre, pre_tenv, post, epost, pre_dyn, post_dyn, epost_dyn, terminates, ss, fb, v, is_override, abstract, mtparams)) ->
                   mn = mn' &&  is_assignable_to_sign inAnnotation argtps sign && not abstract
                 end
                 cmeths
@@ -3469,7 +3475,7 @@ module VerifyProgram1(VerifyProgramArgs: VERIFY_PROGRAM_ARGS) = struct
         | Some {csuper=(csuper, _)} ->
             begin match get_implemented_instance_method csuper mn argtps with
               None -> static_error l "No matching method." None
-            | Some(((mn', sign), MethodInfo (lm, gh, rt, xmap, pre, pre_tenv, post, epost, pre_dyn, post_dyn, epost_dyn, terminates, ss, fb, v, is_override, abstract))) ->
+            | Some(((mn', sign), MethodInfo (lm, gh, rt, xmap, pre, pre_tenv, post, epost, pre_dyn, post_dyn, epost_dyn, terminates, ss, fb, v, is_override, abstract, mtparams))) ->
               let tp = match rt with Some(tp) -> tp | _ -> Void in
               let rank = match ss with Some (Some (_, rank)) -> Some rank | None -> None in
               (WSuperMethodCall (l, csuper, mn, Var (l, "this") :: wargs, (lm, gh, rt, xmap, pre, post, epost, terminates, rank, v)), tp, None)
